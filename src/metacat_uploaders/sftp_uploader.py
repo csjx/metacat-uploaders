@@ -31,8 +31,8 @@ import time
 import sys
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
-import d1_client
-import postgresql
+#import d1_client
+#import postgresql
 import pandas as pd
 from random import randint
 import paramiko
@@ -47,10 +47,9 @@ class SFTPUploader:
         """
         self.object_list_path = object_list_path
         self.object_list = pd.read_csv(self.object_list_path, delimiter=",")
-        self.source_host = "datateam.nceas.ucsb.edu"
-        self.source_port = 22
-        self.username = "<your-ssh-username>"
-        self.password = "<your-password>"
+        self.destination_host = "knbvm.nceas.ucsb.edu"
+        self.destination_port = 22
+        self.keypath = os.path.join(os.sep, "home", "cjones", ".ssh", "cjones.dataone.org.rsa.4096.key")
         self.destination_dir = os.path.join(os.sep, "home", "cjones", "mayer")
     
     def _upload(self, row):
@@ -58,16 +57,29 @@ class SFTPUploader:
         """
         try:
             # Delay each upload to avoid server saturation exceptions
-            delay = randint(1,20)
-            log.info("Sleeping " + str(delay) + " seconds before connecting.")
-            time.sleep(delay)
+            #delay = randint(1,20)
+            #log.info("Sleeping " + str(delay) + " seconds before connecting.")
+            #time.sleep(delay)
             # Establish an SFTP client 
-            transport = paramiko.Transport(self.source_host, self.source_port)
-            transport.connect(username = self.username, password = self.password)
+            log.debug("Setting up transport to " \
+                    + self.destination_host + ":" + self.destination_port)
+            transport = paramiko.Transport(self.destination_host, self.destination_port)
+            log.debug("Using private key " + self.keypath)
+            pkey = paramiko.pkey.PKey.from_private_key_file(self.keypath)
+            log.debug("Connecting ...")
+            transport.connect(pkey = pkey)
+            log.debug("Connected ...")
+            log.debug("Creating client from transport ...")
             sftpClient = paramiko.SFTPClient.from_transport(transport)
+            log.debug("Client: " + sftpClient)
             # Get the file
-            r = sftpClient.get(row[1].filepath, os.path.join(self.destination_dir, row[1].pid))
+            log.debug("Transfering file: " + row[1].filepath)
+            r = sftpClient.put(row[1].filepath, os.path.join(self.destination_dir, row[1].pid))
         
+        except IOError as ioe:
+            log.info("Failed: " + ioe)
+            raise
+
         except paramiko.ssh_exception.SSHException as ssh_exception:
             log.info("Failed: " + ssh_exception)
             raise
@@ -89,7 +101,7 @@ class SFTPUploader:
         """
         start = time.time()
         
-        with ThreadPoolExecutor(max_workers = 16) as executor:
+        with ThreadPoolExecutor(max_workers = 1) as executor:
             futures = [executor.submit(self._upload, row) for row in self.object_list.iterrows()]
             concurrent.futures.wait(futures)
             
@@ -99,7 +111,7 @@ class SFTPUploader:
         log.info('time: {0}'.format(time.time() - start))
         
 def main():
-    object_list_path = os.path.join(os.sep, "Users", "cjones", "mayer2014.csv")
+    object_list_path = os.path.join(os.sep, "home", "cjones", "mayer2014-200.csv")
     uploader = SFTPUploader(object_list_path);
     uploader.run()
     
